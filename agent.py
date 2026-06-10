@@ -1,7 +1,16 @@
 import json
+import sys
 from groq import Groq
 from config import GROQ_API_KEY, LLM_MODEL, MAX_TOOL_ROUNDS
 from tools import lookup_plant, get_seasonal_conditions
+
+# dispatch_tool() prints Unicode arrows (→ ←) for the tool-call trace. On Windows
+# the default console codec (cp1252) can't encode those and raises
+# UnicodeEncodeError, crashing the agent. Force UTF-8 on stdout so the trace prints.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except (AttributeError, ValueError):
+    pass
 
 _client = Groq(api_key=GROQ_API_KEY)
 
@@ -128,4 +137,62 @@ def run_agent(user_message: str, history: list) -> str:
 
     Before writing code, complete specs/agent-loop-spec.md.
     """
-    return "🌱 Agent not yet implemented. Complete Milestone 2 to activate the Plant Advisor."
+    FALLBACK = (
+        "Sorry — I ran into a problem putting together an answer. "
+        "Could you rephrase your question or try again?"
+    )
+
+    # 1. Build the messages list: system prompt + replayed history + new message.
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for user_msg, assistant_msg in history:
+        messages.append({"role": "user", "content": user_msg})
+        if assistant_msg:
+            messages.append({"role": "assistant", "content": assistant_msg})
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        # 2-3. Tool-calling loop, capped by MAX_TOOL_ROUNDS to prevent runaway loops.
+        for _ in range(MAX_TOOL_ROUNDS):
+            response = _client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=messages,
+                tools=TOOL_DEFINITIONS,
+                tool_choice="auto",
+            )
+            assistant_message = response.choices[0].message
+
+            # No tool calls → the LLM has a final answer. Exit condition (a).
+            if not assistant_message.tool_calls:
+                return assistant_message.content or FALLBACK
+
+            # Append the assistant message FIRST, before any tool results, so each
+            # tool result can be matched to its request via tool_call_id.
+            messages.append(assistant_message)
+
+            for tool_call in assistant_message.tool_calls:
+                tool_name = tool_call.function.name
+                # For no-arg tools the model may send "", "null", or "{}". Coerce
+                # to a dict so dispatch_tool() can safely call .get() on it.
+                raw_args = tool_call.function.arguments
+                tool_args = json.loads(raw_args) if raw_args else {}
+                if not isinstance(tool_args, dict):
+                    tool_args = {}
+                tool_result = dispatch_tool(tool_name, tool_args)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": tool_result,
+                })
+
+        # Exit condition (b): hit MAX_TOOL_ROUNDS while still requesting tools.
+        # Force a final text answer with no further tool calls.
+        final = _client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=messages,
+            tool_choice="none",
+        )
+        return final.choices[0].message.content or FALLBACK
+
+    except Exception as e:
+        print(f"  ✗ Agent error: {e}")
+        return FALLBACK

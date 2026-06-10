@@ -70,7 +70,21 @@ likely match for clean user input. Aliases are the broadest net, so they go last
 *Aliases are stored as a list of strings. How will you check if the normalized input matches any alias in the list? Write your approach in pseudocode or plain English.*
 
 ```
-[your answer here]
+For each plant in the database, lowercase every alias in its "aliases" list and
+test membership of the normalized input against that lowercased list:
+
+    if normalized in [alias.lower() for alias in plant["aliases"]]:
+        return {"found": True, "plant": plant}
+
+This is a linear scan over the 15 plants (O(n) plants × O(a) aliases each), which
+is trivial at this size. If the database grew to thousands of plants, I would build
+a single flat lookup dict ONCE at module load — mapping every normalized name
+variant (key, display_name, scientific_name, and each alias) to its plant slug —
+so any lookup becomes a single O(1) dict access instead of a scan. For 15 plants
+the scan is simpler and fast enough, so I keep it.
+
+I also match scientific_name in the same pass, since the tool definition explicitly
+tells the LLM it can pass a scientific name (e.g., "Monstera deliciosa").
 ```
 
 ---
@@ -80,7 +94,18 @@ likely match for clean user input. Aliases are the broadest net, so they go last
 *When a plant isn't found, the agent will read your message and use it to decide what to tell the user. Write the exact string you'll return — make it useful to the agent, not just to a human reading logs.*
 
 ```
-[your answer here]
+f"'{plant_name}' is not in the plant care database. Do not invent specific care "
+f"instructions for it. Acknowledge to the user that this plant isn't in your "
+f"database, then offer general guidance based on the plant type or what the user "
+f"describes, and suggest they confirm details with a specialized source."
+
+This message does two jobs the LLM can act on directly:
+  1. It states the gap plainly so the agent stops trying to look it up.
+  2. It instructs the agent on the desired behavior — graceful degradation, not a
+     dead-end "I don't know" and not a confidently-wrong fabrication. The message,
+     not just the system prompt, carries the instruction because it lands in the
+     tool-result context the LLM is reasoning over at the moment it decides what
+     to say.
 ```
 
 ---
@@ -91,17 +116,23 @@ likely match for clean user input. Aliases are the broadest net, so they go last
 
 **Test: does `"devil's ivy"` return the pothos entry?**
 ```
-[yes / no — if no, describe what happened]
+Yes — {"found": True, "plant": {"display_name": "Pothos", ...}} (matched via alias).
 ```
 
 **Test: does `"SNAKE PLANT"` return the snake plant entry?**
 ```
-[yes / no — if no, describe what happened]
+Yes — even with surrounding whitespace ("  SNAKE PLANT ") it returns found: True,
+because the input is .strip().lower()'d before matching against the display name.
 ```
 
 **One edge case you discovered while implementing:**
 ```
-[your answer here]
+The plant data keys (slugs) use underscores ("snake_plant"), but users type spaces
+("snake plant"). A raw user phrase like "snake plant" therefore does NOT hit the
+fast O(1) key path — it's caught one step later by the case-insensitive display_name
+match ("Snake Plant".lower() == "snake plant"). Worth knowing: the direct-key path
+mainly serves slugs the LLM passes, while human phrasing usually resolves via
+display_name or aliases.
 ```
 
 ---
@@ -183,12 +214,13 @@ The full season dict from `_season_data`, plus a `detected_season` boolean. Exam
 
 **Test: does calling with `season=None` return the correct season for the current month?**
 ```
-Current month: [month]
-Expected season: [season]
-Returned season: [season]
+Current month: 6 (June)
+Expected season: summer
+Returned season: summer  (dict["name"] == "summer", detected_season: True)
 ```
 
 **Test: does calling with `season="winter"` return winter data regardless of the current month?**
 ```
-[yes / no]
+Yes — passing season="winter" returns the winter dict with detected_season: False,
+independent of the current month.
 ```

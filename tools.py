@@ -52,10 +52,34 @@ def lookup_plant(plant_name: str) -> dict:
 
     Before writing code, complete the lookup_plant section of specs/tool-functions-spec.md.
     """
+    normalized = plant_name.strip().lower()
+
+    # 1. Direct key match — O(1) dict access, the fastest and most likely path.
+    if normalized in _plant_db:
+        return {"found": True, "plant": _plant_db[normalized]}
+
+    # 2. Display name, 3. scientific name, 4. aliases — scan the small DB.
+    # (Scientific name is included because the tool definition tells the LLM it
+    # may pass one, e.g. "Monstera deliciosa".)
+    for plant in _plant_db.values():
+        if plant["display_name"].lower() == normalized:
+            return {"found": True, "plant": plant}
+        if plant.get("scientific_name", "").lower() == normalized:
+            return {"found": True, "plant": plant}
+        if normalized in [alias.lower() for alias in plant.get("aliases", [])]:
+            return {"found": True, "plant": plant}
+
+    # Not found — return a message the agent can act on (graceful degradation).
     return {
         "found": False,
-        "name": plant_name,
-        "message": "Plant lookup not yet implemented. Complete Milestone 1.",
+        "name": normalized,
+        "message": (
+            f"'{plant_name}' is not in the plant care database. Do not invent "
+            f"specific care instructions for it. Acknowledge to the user that this "
+            f"plant isn't in your database, then offer general guidance based on the "
+            f"plant type or what the user describes, and suggest they confirm details "
+            f"with a specialized source."
+        ),
     }
 
 
