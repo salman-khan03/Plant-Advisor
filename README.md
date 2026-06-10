@@ -1,4 +1,4 @@
-# Plant Advisor — AI201 Lab 2 Starter
+# Plant Advisor
 
 A conversational agent that helps users care for their houseplants. Ask it anything about a plant in its database and it will look up the care requirements, check the current seasonal context, and give you specific, grounded advice.
 
